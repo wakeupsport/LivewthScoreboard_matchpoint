@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Matchpoint Scoreboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script>
+/* ============================================================
+   SỬA 1 DÒNG DUY NHẤT DƯỚI ĐÂY TRƯỚC KHI UPLOAD
+   Dán databaseURL của Firebase Realtime Database vào đây.
+   Ví dụ: "https://pickle-board-default-rtdb.asia-southeast1.firebasedatabase.app"
+   ============================================================ */
+var DB_URL = "";
+</script>
+<style>
+:root{
+  --orange:#FFA01E; --gold:#D4A843; --jet:#111114;
+  --panel:#16161A; --panel2:#1E1E24; --line:#2C2C34;
+  --txt:#F4F4F6; --dim:#9A9AA6; --live:#E5343F;
+  font-family:'Manrope',system-ui,-apple-system,'Segoe UI',sans-serif;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+
+/* ---------- OVERLAY (board) ---------- */
+body.board{background:transparent}
+.board-wrap{width:100%;height:100vh;display:flex;align-items:flex-start;justify-content:flex-start;padding:0}
+.bug{
+  width:100%;max-width:620px;background:linear-gradient(180deg,#1A1A20 0%,#101014 100%);
+  border:1px solid var(--line);border-radius:14px;overflow:hidden;
+  box-shadow:0 10px 34px rgba(0,0,0,.55);position:relative;
+}
+.bug-head{
+  display:flex;align-items:center;gap:10px;padding:9px 14px;
+  background:linear-gradient(90deg,#22222A 0%,#17171C 100%);
+  border-bottom:1px solid var(--line);
+}
+.chip-live{
+  display:none;align-items:center;gap:6px;background:var(--live);color:#fff;
+  font-size:11px;font-weight:800;letter-spacing:.09em;padding:3px 9px;border-radius:4px;
+}
+.chip-live.on{display:inline-flex}
+.chip-live i{width:6px;height:6px;border-radius:50%;background:#fff;animation:blink 1.4s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
+.head-txt{min-width:0;flex:1}
+.head-t1{font-size:12px;font-weight:800;letter-spacing:.05em;color:var(--txt);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-transform:uppercase}
+.head-t2{font-size:10.5px;font-weight:600;color:var(--dim);letter-spacing:.04em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-transform:uppercase}
+.brand{text-align:right;flex-shrink:0}
+.brand-1{font-size:12px;font-weight:800;letter-spacing:.06em;color:var(--txt)}
+.brand-2{font-size:8.5px;font-weight:700;letter-spacing:.16em;color:var(--orange);margin-top:1px}
+
+.rows{padding:6px 0}
+.row{display:flex;align-items:center;gap:11px;padding:8px 14px;position:relative}
+.row+.row{border-top:1px solid rgba(255,255,255,.05)}
+.row.serving::before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:3px;
+  background:var(--orange);border-radius:0 3px 3px 0}
+.ava{width:36px;height:36px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;
+  justify-content:center;font-size:13px;font-weight:800;color:#0B0B0D;background:var(--orange);
+  border:2px solid rgba(255,255,255,.14);overflow:hidden}
+.ava.b{background:#4DA3FF}
+.ava img{width:100%;height:100%;object-fit:cover}
+.names{flex:1;min-width:0}
+.nm{font-size:14.5px;font-weight:700;color:var(--txt);line-height:1.25;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nm2{font-size:11.5px;font-weight:600;color:var(--dim);line-height:1.25;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dot{width:9px;height:9px;border-radius:50%;background:#3A3A44;flex-shrink:0}
+.row.serving .dot{background:var(--orange);box-shadow:0 0 0 3px rgba(255,160,30,.22)}
+.srvnum{font-size:10px;font-weight:800;color:var(--orange);width:10px;text-align:center;flex-shrink:0}
+.games{display:flex;gap:4px;flex-shrink:0}
+.g{width:22px;height:26px;border-radius:5px;background:var(--panel2);border:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--dim)}
+.g.won{background:rgba(212,168,67,.16);border-color:rgba(212,168,67,.5);color:var(--gold)}
+.pts{width:52px;height:38px;border-radius:7px;background:var(--panel2);border:1px solid var(--line);
+  display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;
+  color:var(--txt);flex-shrink:0;font-variant-numeric:tabular-nums}
+.row.serving .pts{background:var(--orange);border-color:var(--orange);color:#141416}
+
+.badge-slot{height:26px;padding:0 14px 8px;display:flex;align-items:flex-start}
+.badge{
+  display:none;align-items:center;height:22px;padding:0 22px 0 12px;
+  background:linear-gradient(90deg,var(--gold) 0%,#E8C46B 100%);color:#221B05;
+  font-size:11px;font-weight:800;letter-spacing:.11em;
+  clip-path:polygon(0 0,100% 0,calc(100% - 11px) 100%,0 100%);
+}
+.badge.on{display:inline-flex}
+
+/* ---------- CONTROL ---------- */
+body.ctrl{background:#0B0B0E;color:var(--txt);height:100dvh;overflow:hidden}
+.c-wrap{height:100dvh;display:flex;flex-direction:column;padding:env(safe-area-inset-top) 8px calc(env(safe-area-inset-bottom) + 6px)}
+.c-top{display:flex;align-items:center;gap:8px;padding:8px 4px 6px;flex-shrink:0}
+.c-status{font-size:11px;font-weight:700;letter-spacing:.05em;color:var(--dim);flex:1;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.c-status b{color:var(--orange)}
+.pill{background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:8px;
+  padding:7px 11px;font-size:12px;font-weight:700;font-family:inherit}
+.pill.live-on{background:var(--live);border-color:var(--live);color:#fff}
+
+.c-score{display:flex;gap:8px;padding:0 4px 8px;flex-shrink:0}
+.c-sc{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 10px}
+.c-sc.serving{border-color:var(--orange);background:rgba(255,160,30,.08)}
+.c-sc-nm{font-size:11.5px;font-weight:700;color:var(--dim);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;margin-bottom:2px}
+.c-sc-row{display:flex;align-items:baseline;gap:8px}
+.c-sc-p{font-size:38px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
+.c-sc-g{font-size:13px;font-weight:700;color:var(--gold)}
+.c-sc-s{font-size:11px;font-weight:800;color:var(--orange);margin-left:auto}
+
+.c-btns{flex:1;display:flex;gap:8px;padding:0 4px;min-height:0}
+.big{flex:1;border:none;border-radius:16px;font-family:inherit;font-weight:800;color:#141416;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  font-size:15px;letter-spacing:.03em;padding:10px;transition:transform .07s;cursor:pointer}
+.big:active{transform:scale(.97)}
+.big.a{background:linear-gradient(160deg,#FFB44E,#FF9500)}
+.big.b{background:linear-gradient(160deg,#6FB6FF,#2E90FF)}
+.big em{font-style:normal;font-size:30px;font-weight:800;line-height:1}
+.big span{opacity:.72;font-size:12px;font-weight:700;max-width:100%;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.c-bar{display:flex;gap:6px;padding:8px 4px 0;flex-shrink:0}
+.c-bar button{flex:1;background:var(--panel);border:1px solid var(--line);color:var(--txt);
+  border-radius:10px;padding:12px 4px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer}
+.c-bar button:active{background:var(--panel2)}
+.c-bar button.warn{color:#FF8B8B}
+
+/* setup sheet */
+.sheet{position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;z-index:9;
+  align-items:flex-end;backdrop-filter:blur(3px)}
+.sheet.on{display:flex}
+.sheet-in{background:#131318;width:100%;max-height:92dvh;overflow:auto;border-radius:18px 18px 0 0;
+  padding:16px 14px calc(env(safe-area-inset-bottom) + 16px);border-top:1px solid var(--line)}
+.sh-h{font-size:15px;font-weight:800;margin:0 0 12px}
+.fld{margin-bottom:11px}
+.fld label{display:block;font-size:11px;font-weight:700;color:var(--dim);margin-bottom:4px;
+  letter-spacing:.05em;text-transform:uppercase}
+.fld input,.fld select{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--txt);
+  border-radius:9px;padding:11px;font-size:15px;font-family:inherit}
+.two{display:flex;gap:8px}.two>*{flex:1}
+.seg{display:flex;gap:6px}
+.seg button{flex:1;background:var(--panel2);border:1px solid var(--line);color:var(--dim);
+  border-radius:9px;padding:11px 4px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer}
+.seg button.on{background:var(--orange);border-color:var(--orange);color:#141416}
+.sh-act{display:flex;gap:8px;margin-top:16px}
+.sh-act button{flex:1;border-radius:11px;padding:14px;font-size:14px;font-weight:800;
+  font-family:inherit;border:none;cursor:pointer}
+.sh-act .ok{background:var(--orange);color:#141416}
+.sh-act .no{background:var(--panel2);color:var(--txt);border:1px solid var(--line)}
+.hint{font-size:11px;color:var(--dim);line-height:1.5;margin:10px 0 0}
+.hint code{background:var(--panel2);padding:1px 5px;border-radius:4px;font-size:10.5px;
+  word-break:break-all}
+.err{background:#2A1416;border:1px solid #63252A;color:#FFB4B4;padding:9px 11px;border-radius:10px;
+  font-size:11.5px;line-height:1.45;margin:0 4px 6px;flex-shrink:0}
+.err code{background:rgba(0,0,0,.35);padding:1px 4px;border-radius:4px;word-break:break-all}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+(function(){
+"use strict";
+
+/* ---------------- helpers ---------------- */
+var qs = new URLSearchParams(location.search);
+var MODE = (qs.get('m') || 'ctrl').toLowerCase();          // board | ctrl
+var ROOM = (qs.get('room') || 'default').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,40) || 'default';
+var DBU  = (qs.get('db') || DB_URL || '').replace(/\/+$/,'');
+var PATH = DBU ? DBU + '/rooms/' + ROOM + '.json' : '';
+var $ = function(s,r){ return (r||document).querySelector(s); };
+var esc = function(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); };
+
+/* ---------------- state ---------------- */
+function fresh(){
+  return {
+    v:1, ts:0,
+    meta:{ t1:'MATCHPOINT PICKLEBALL', t2:'ĐÔI NAM — BÁN KẾT',
+           b1:'MATCHPOINT.ASIA', b2:'CÔNG NGHỆ & VẬN HÀNH', live:true },
+    cfg:{ mode:'sideout', doubles:true, target:11, winBy2:true, cap:0, bestOf:3 },
+    A:{ n1:'ĐỘI A', n2:'', av:'' },
+    B:{ n1:'ĐỘI B', n2:'', av:'' },
+    s:[0,0], g:[0,0],
+    srv:{ t:0, n:2 },
+    swap:false, over:false
+  };
+}
+var S = fresh();
+var HIST = [];
+
+function snap(){ HIST.push(JSON.stringify(S)); if(HIST.length>80) HIST.shift(); }
+function undo(){ if(!HIST.length) return; S = JSON.parse(HIST.pop()); push(); render(); }
+
+/* ---------------- luật ---------------- */
+function gameWon(i){
+  var me = S.s[i], you = S.s[1-i], t = S.cfg.target, cap = +S.cfg.cap || 0;
+  if(cap && me >= cap) return true;
+  if(me < t) return false;
+  return S.cfg.winBy2 ? (me - you >= 2) : true;
+}
+function toWinMatch(){ return Math.floor(S.cfg.bestOf/2) + 1; }
+
+/* điểm tiếp theo của đội i có kết thúc game không */
+function wouldWin(i){
+  var me = S.s[i]+1, you = S.s[1-i], t = S.cfg.target, cap = +S.cfg.cap || 0;
+  if(cap && me >= cap) return true;
+  if(me < t) return false;
+  return S.cfg.winBy2 ? (me - you >= 2) : true;
+}
+/* đội i có đang ở game/match point không */
+function atPoint(i){
+  if(S.over) return null;
+  if(S.cfg.mode === 'sideout' && S.srv.t !== i) return null;  // không giao thì không ghi được điểm
+  if(!wouldWin(i)) return null;
+  return (S.g[i] + 1 >= toWinMatch()) ? 'match' : 'game';
+}
+
+function rally(win){
+  if(S.over) return;
+  snap();
+  if(S.cfg.mode === 'rally'){
+    S.s[win]++;
+    S.srv.t = win;
+    if(S.cfg.doubles && S.srv.n !== 1) S.srv.n = 1;
+  } else {
+    if(win === S.srv.t){
+      S.s[win]++;
+    } else {
+      if(S.cfg.doubles && S.srv.n === 1){ S.srv.n = 2; }
+      else { S.srv.t = win; S.srv.n = 1; }
+    }
+  }
+  if(gameWon(win)) endGame(win);
+  push(); render();
+}
+
+function endGame(win){
+  S.g[win]++;
+  if(S.g[win] >= toWinMatch()){ S.over = true; return; }
+  S.s = [0,0];
+  S.srv = { t: win, n: S.cfg.doubles ? 2 : 1 };
+}
+
+function adjust(i,d){
+  if(S.s[i]+d < 0) return;
+  snap(); S.s[i] += d; S.over = false; push(); render();
+}
+function nextGame(){
+  snap();
+  if(!S.over && (S.s[0]||S.s[1])){ /* bỏ game dở */ }
+  S.s=[0,0]; S.over=false;
+  S.srv={ t:S.srv.t, n:S.cfg.doubles?2:1 };
+  push(); render();
+}
+function resetAll(){
+  var keep = { meta:S.meta, cfg:S.cfg, A:S.A, B:S.B };
+  snap(); S = fresh(); S.meta=keep.meta; S.cfg=keep.cfg; S.A=keep.A; S.B=keep.B;
+  S.srv={ t:0, n:S.cfg.doubles?2:1 };
+  push(); render();
+}
+
+/* ---------------- transport: Firebase RTDB REST ---------------- */
+var netOk = false, es = null, pollT = null, lastSent = 0;
+
+function push(){
+  if(!PATH) { localEcho(); return; }
+  S.ts = Date.now();
+  lastSent = S.ts;
+  fetch(PATH, { method:'PUT', body: JSON.stringify(S) })
+    .then(function(r){ netOk = r.ok; if(!r.ok) console.warn('PUT', r.status); paintStatus(); })
+    .catch(function(e){ netOk=false; paintStatus(); console.warn(e); });
+  localEcho();
+}
+/* echo nội bộ để 2 tab cùng máy test được khi chưa có Firebase */
+var BC = null;
+try { BC = new BroadcastChannel('mpsb-' + ROOM); } catch(e){}
+function localEcho(){ if(BC) try{ BC.postMessage(JSON.stringify(S)); }catch(e){} }
+if(BC) BC.onmessage = function(ev){
+  if(MODE !== 'board') return;
+  try{ var d = JSON.parse(ev.data); if(d && d.v){ S = d; render(); } }catch(e){}
+};
+
+function apply(d){
+  if(!d || !d.v) return;
+  if(MODE === 'ctrl' && d.ts && d.ts <= lastSent) return;   // đừng đè lệnh vừa gửi
+  S = d; render();
+}
+
+function listen(){
+  if(!PATH) return;
+  try{
+    es = new EventSource(PATH);
+    es.addEventListener('put', onEv);
+    es.addEventListener('patch', onEv);
+    es.onopen = function(){ netOk = true; paintStatus(); };
+    es.onerror = function(){ netOk = false; paintStatus(); startPoll(); };
+  }catch(e){ startPoll(); }
+}
+function onEv(e){
+  netOk = true; paintStatus();
+  try{
+    var m = JSON.parse(e.data);
+    if(!m) return;
+    if(m.path === '/' ) apply(m.data);
+    else if(m.data && m.data.v) apply(m.data);
+    else pollOnce();
+  }catch(err){}
+}
+function startPoll(){ if(pollT) return; pollT = setInterval(pollOnce, 800); }
+function pollOnce(){
+  if(!PATH) return;
+  fetch(PATH, {cache:'no-store'}).then(function(r){ return r.json(); })
+    .then(function(d){ netOk = true; paintStatus(); apply(d); })
+    .catch(function(){ netOk = false; paintStatus(); });
+}
+
+/* ---------------- render: board ---------------- */
+function boardHTML(){
+  return ''
+  + '<div class="board-wrap"><div class="bug">'
+  +   '<div class="bug-head">'
+  +     '<span class="chip-live" id="lv"><i></i>LIVE</span>'
+  +     '<div class="head-txt"><div class="head-t1" id="h1"></div><div class="head-t2" id="h2"></div></div>'
+  +     '<div class="brand"><div class="brand-1" id="b1"></div><div class="brand-2" id="b2"></div></div>'
+  +   '</div>'
+  +   '<div class="rows" id="rows"></div>'
+  +   '<div class="badge-slot"><span class="badge" id="bdg"></span></div>'
+  + '</div></div>';
+}
+function rowHTML(side, cls){
+  var d = S[side], i = (side==='A'?0:1);
+  var serving = (S.srv.t === i && !S.over);
+  var ava = d.av
+    ? '<img src="'+esc(d.av)+'" alt="">'
+    : esc((d.n1||'?').trim().charAt(0).toUpperCase());
+  var gs = '';
+  var need = toWinMatch();
+  for(var k=0;k<S.cfg.bestOf;k++){
+    if(k >= need && S.g[i] <= k && S.g[1-i] <= k && k >= Math.max(S.g[0],S.g[1])+need) break;
+  }
+  gs = '<div class="g'+(S.g[i]>0?' won':'')+'">'+S.g[i]+'</div>';
+  return '<div class="row'+(serving?' serving':'')+'">'
+    +'<div class="ava '+cls+'">'+ava+'</div>'
+    +'<div class="names"><div class="nm">'+esc(d.n1)+'</div>'
+    + (d.n2 ? '<div class="nm2">'+esc(d.n2)+'</div>' : '') +'</div>'
+    +'<span class="srvnum">'+(serving && S.cfg.doubles && S.cfg.mode==='sideout' ? S.srv.n : '')+'</span>'
+    +'<span class="dot"></span>'
+    +'<div class="games">'+gs+'</div>'
+    +'<div class="pts">'+S.s[i]+'</div>'
+    +'</div>';
+}
+function renderBoard(){
+  $('#h1').textContent = S.meta.t1 || '';
+  $('#h2').textContent = S.meta.t2 || '';
+  $('#b1').textContent = S.meta.b1 || '';
+  $('#b2').textContent = S.meta.b2 || '';
+  $('#lv').className = 'chip-live' + (S.meta.live ? ' on' : '');
+  var first = S.swap ? 'B' : 'A', second = S.swap ? 'A' : 'B';
+  $('#rows').innerHTML = rowHTML(first, first==='A'?'':'b') + rowHTML(second, second==='A'?'':'b');
+
+  var bdg = $('#bdg'), txt = '';
+  if(S.over){
+    txt = (S.g[0] > S.g[1] ? S.A.n1 : S.B.n1) + ' THẮNG';
+  } else {
+    var pa = atPoint(0), pb = atPoint(1);
+    if(pa) txt = (pa==='match'?'MATCH POINT — ':'GAME POINT — ') + S.A.n1;
+    else if(pb) txt = (pb==='match'?'MATCH POINT — ':'GAME POINT — ') + S.B.n1;
+  }
+  bdg.textContent = txt;
+  bdg.className = 'badge' + (txt ? ' on' : '');
+}
+
+/* ---------------- render: control ---------------- */
+function ctrlHTML(){
+  return ''
+  + '<div class="c-wrap">'
+  +  (PATH ? '' : '<div class="err" id="noconf"></div>')
+  +  '<div class="c-top">'
+  +    '<div class="c-status" id="st"></div>'
+  +    '<button class="pill" id="liveBtn">LIVE</button>'
+  +    '<button class="pill" id="setBtn">Cài đặt</button>'
+  +  '</div>'
+  +  '<div class="c-score">'
+  +    '<div class="c-sc" id="scA"><div class="c-sc-nm" id="nmA"></div>'
+  +      '<div class="c-sc-row"><span class="c-sc-p" id="pA">0</span>'
+  +      '<span class="c-sc-g" id="gA"></span><span class="c-sc-s" id="sA"></span></div></div>'
+  +    '<div class="c-sc" id="scB"><div class="c-sc-nm" id="nmB"></div>'
+  +      '<div class="c-sc-row"><span class="c-sc-p" id="pB">0</span>'
+  +      '<span class="c-sc-g" id="gB"></span><span class="c-sc-s" id="sB"></span></div></div>'
+  +  '</div>'
+  +  '<div class="c-btns">'
+  +    '<button class="big a" id="winA"><em>+1</em><span id="lbA"></span></button>'
+  +    '<button class="big b" id="winB"><em>+1</em><span id="lbB"></span></button>'
+  +  '</div>'
+  +  '<div class="c-bar">'
+  +    '<button id="undoBtn">↶ Hoàn tác</button>'
+  +    '<button id="mA">−1 A</button>'
+  +    '<button id="mB">−1 B</button>'
+  +    '<button id="swapBtn">⇄ Đổi bên</button>'
+  +    '<button id="ngBtn">Game mới</button>'
+  +  '</div>'
+  + '</div>'
+  + sheetHTML();
+}
+function sheetHTML(){
+  return '<div class="sheet" id="sheet"><div class="sheet-in">'
+  + '<h3 class="sh-h">Cài đặt trận</h3>'
+  + '<div class="fld"><label>Tên giải (dòng 1)</label><input id="f_t1"></div>'
+  + '<div class="fld"><label>Nội dung thi đấu (dòng 2)</label><input id="f_t2"></div>'
+  + '<div class="two"><div class="fld"><label>Đội A — tên</label><input id="f_a1"></div>'
+  +   '<div class="fld"><label>Đội A — dòng phụ</label><input id="f_a2"></div></div>'
+  + '<div class="two"><div class="fld"><label>Đội B — tên</label><input id="f_b1"></div>'
+  +   '<div class="fld"><label>Đội B — dòng phụ</label><input id="f_b2"></div></div>'
+  + '<div class="fld"><label>Cách tính điểm</label><div class="seg">'
+  +   '<button data-k="mode" data-v="sideout">Side-out (chỉ đội giao)</button>'
+  +   '<button data-k="mode" data-v="rally">Rally (ai thắng cũng có điểm)</button></div></div>'
+  + '<div class="fld"><label>Thể thức</label><div class="seg">'
+  +   '<button data-k="doubles" data-v="1">Đôi</button>'
+  +   '<button data-k="doubles" data-v="0">Đơn</button></div></div>'
+  + '<div class="two">'
+  +   '<div class="fld"><label>Điểm thắng game</label><select id="f_target">'
+  +     '<option>11</option><option>15</option><option>21</option></select></div>'
+  +   '<div class="fld"><label>Số game (best of)</label><select id="f_bo">'
+  +     '<option value="1">1</option><option value="3">3</option><option value="5">5</option></select></div>'
+  + '</div>'
+  + '<div class="two">'
+  +   '<div class="fld"><label>Cách 2 điểm</label><select id="f_wb">'
+  +     '<option value="1">Có</option><option value="0">Không</option></select></div>'
+  +   '<div class="fld"><label>Trần điểm (0 = không)</label><input id="f_cap" type="number" min="0"></div>'
+  + '</div>'
+  + '<div class="two"><div class="fld"><label>Logo — dòng 1</label><input id="f_br1"></div>'
+  +   '<div class="fld"><label>Logo — dòng 2</label><input id="f_br2"></div></div>'
+  + '<div class="sh-act"><button class="no" id="shClose">Đóng</button>'
+  +   '<button class="no" style="color:#FF8B8B" id="shReset">Xoá về 0</button>'
+  +   '<button class="ok" id="shSave">Lưu</button></div>'
+  + '<p class="hint" id="urlHint"></p>'
+  + '</div></div>';
+}
+
+function paintStatus(){
+  var el = $('#st'); if(!el) return;
+  var m = S.cfg.mode==='rally' ? 'Rally' : 'Side-out';
+  var d = S.cfg.doubles ? 'đôi' : 'đơn';
+  el.innerHTML = '<b>'+esc(ROOM)+'</b> · '+m+' '+d+' · '+S.cfg.target
+    + ' · ' + (PATH ? (netOk ? '● nối' : '○ mất kết nối') : '○ chưa cấu hình');
+}
+function renderCtrl(){
+  var srv = S.srv.t, over = S.over;
+  $('#nmA').textContent = S.A.n1; $('#nmB').textContent = S.B.n1;
+  $('#pA').textContent = S.s[0];  $('#pB').textContent = S.s[1];
+  $('#gA').textContent = 'game ' + S.g[0]; $('#gB').textContent = 'game ' + S.g[1];
+  $('#sA').textContent = (!over && srv===0) ? ('GIAO'+(S.cfg.doubles&&S.cfg.mode==='sideout'?' '+S.srv.n:'')) : '';
+  $('#sB').textContent = (!over && srv===1) ? ('GIAO'+(S.cfg.doubles&&S.cfg.mode==='sideout'?' '+S.srv.n:'')) : '';
+  $('#scA').className = 'c-sc' + (!over && srv===0 ? ' serving' : '');
+  $('#scB').className = 'c-sc' + (!over && srv===1 ? ' serving' : '');
+  $('#lbA').textContent = over ? 'Trận đã kết thúc' : (S.A.n1 + ' thắng pha');
+  $('#lbB').textContent = over ? 'Bấm “Xoá về 0”' : (S.B.n1 + ' thắng pha');
+  $('#winA').disabled = over; $('#winB').disabled = over;
+  $('#winA').style.opacity = over ? .4 : 1; $('#winB').style.opacity = over ? .4 : 1;
+  $('#liveBtn').className = 'pill' + (S.meta.live ? ' live-on' : '');
+  paintStatus();
+}
+
+/* ---------------- setup sheet ---------------- */
+function openSheet(){
+  $('#f_t1').value = S.meta.t1; $('#f_t2').value = S.meta.t2;
+  $('#f_a1').value = S.A.n1; $('#f_a2').value = S.A.n2;
+  $('#f_b1').value = S.B.n1; $('#f_b2').value = S.B.n2;
+  $('#f_target').value = S.cfg.target; $('#f_bo').value = S.cfg.bestOf;
+  $('#f_wb').value = S.cfg.winBy2 ? '1' : '0'; $('#f_cap').value = S.cfg.cap || 0;
+  $('#f_br1').value = S.meta.b1; $('#f_br2').value = S.meta.b2;
+  segPaint();
+  var u = location.origin + location.pathname + '?m=board&room=' + ROOM + (qs.get('db')?'&db='+encodeURIComponent(qs.get('db')):'');
+  $('#urlHint').innerHTML = 'URL dán vào Larix (Web widget):<br><code>'+esc(u)+'</code>';
+  $('#sheet').classList.add('on');
+}
+function segPaint(){
+  document.querySelectorAll('.seg button').forEach(function(b){
+    var k = b.dataset.k, v = b.dataset.v, cur;
+    cur = (k==='mode') ? S.cfg.mode : (S.cfg.doubles ? '1' : '0');
+    b.classList.toggle('on', String(cur) === v);
+  });
+}
+function saveSheet(){
+  snap();
+  S.meta.t1 = $('#f_t1').value; S.meta.t2 = $('#f_t2').value;
+  S.A.n1 = $('#f_a1').value || 'ĐỘI A'; S.A.n2 = $('#f_a2').value;
+  S.B.n1 = $('#f_b1').value || 'ĐỘI B'; S.B.n2 = $('#f_b2').value;
+  S.cfg.target = +$('#f_target').value; S.cfg.bestOf = +$('#f_bo').value;
+  S.cfg.winBy2 = $('#f_wb').value === '1'; S.cfg.cap = +$('#f_cap').value || 0;
+  S.meta.b1 = $('#f_br1').value; S.meta.b2 = $('#f_br2').value;
+  $('#sheet').classList.remove('on');
+  push(); render();
+}
+
+/* ---------------- boot ---------------- */
+function render(){ MODE === 'board' ? renderBoard() : renderCtrl(); }
+
+function bindCtrl(){
+  var tap = function(fn){ return function(){ if(navigator.vibrate) navigator.vibrate(12); fn(); }; };
+  $('#winA').onclick = tap(function(){ rally(0); });
+  $('#winB').onclick = tap(function(){ rally(1); });
+  $('#undoBtn').onclick = tap(undo);
+  $('#mA').onclick = tap(function(){ adjust(0,-1); });
+  $('#mB').onclick = tap(function(){ adjust(1,-1); });
+  $('#swapBtn').onclick = tap(function(){ snap(); S.swap = !S.swap; push(); render(); });
+  $('#ngBtn').onclick = tap(function(){ if(confirm('Bắt đầu game mới?')) nextGame(); });
+  $('#liveBtn').onclick = tap(function(){ snap(); S.meta.live = !S.meta.live; push(); render(); });
+  $('#setBtn').onclick = openSheet;
+  $('#shClose').onclick = function(){ $('#sheet').classList.remove('on'); };
+  $('#shSave').onclick = saveSheet;
+  $('#shReset').onclick = function(){ if(confirm('Xoá điểm và game về 0?')){ resetAll(); $('#sheet').classList.remove('on'); } };
+  document.querySelectorAll('.seg button').forEach(function(b){
+    b.onclick = function(){
+      if(b.dataset.k === 'mode') S.cfg.mode = b.dataset.v;
+      else { S.cfg.doubles = b.dataset.v === '1'; if(!S.cfg.doubles) S.srv.n = 1; }
+      segPaint();
+    };
+  });
+  if(!PATH){
+    $('#noconf').innerHTML = '<b>Chưa cấu hình Firebase.</b> Đang chạy chế độ thử nghiệm '
+      + '(chỉ đồng bộ giữa 2 tab trên cùng máy). Sửa dòng <code>var DB_URL</code> trong file, '
+      + 'hoặc thêm <code>&amp;db=https://...firebasedatabase.app</code> vào URL.';
+  }
+}
+
+document.body.className = MODE === 'board' ? 'board' : 'ctrl';
+document.getElementById('app').innerHTML = MODE === 'board' ? boardHTML() : ctrlHTML();
+if(MODE === 'ctrl') bindCtrl();
+S.srv = { t:0, n: S.cfg.doubles ? 2 : 1 };
+render();
+
+if(MODE === 'board'){ listen(); pollOnce(); }
+else { pollOnce(); setTimeout(function(){ push(); }, 400); }
+
+})();
+</script>
+</body>
+</html>
