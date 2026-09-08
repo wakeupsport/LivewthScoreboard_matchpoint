@@ -430,9 +430,13 @@ else
     FB="${FB_URL:-}"; YT="${YT_URL:-}"; TT="${TT_URL:-}"
   fi
   [ -n "$TT_EXTRA" ] && TT="$TT_EXTRA"
-  [ -n "$FB" ] && OUTS+=("[f=flv:onfail=ignore]$FB")
-  [ -n "$YT" ] && OUTS+=("[f=flv:onfail=ignore]$YT")
-  [ -n "$TT" ] && OUTS+=("[f=flv:onfail=ignore]$TT")
+  # Mỗi đích mạng bọc trong muxer fifo (luồng riêng, hàng đợi riêng): đích nào chậm/chết thì
+  # rớt gói của riêng nó rồi tự nối lại, KHÔNG kéo cả pipeline đứng theo — nếu không, một đích
+  # nghẽn sẽ làm ffmpeg ngừng đọc, MediaMTX đóng kết nối (Broken pipe) và bản ghi cụt.
+  NET="[f=fifo:fifo_format=flv:queue_size=600:drop_pkts_on_overflow=1:attempt_recovery=1:max_recovery_attempts=0:recovery_wait_time=2:restart_with_keyframe=1:onfail=ignore]"
+  [ -n "$FB" ] && OUTS+=("$NET$FB")
+  [ -n "$YT" ] && OUTS+=("$NET$YT")
+  [ -n "$TT" ] && OUTS+=("$NET$TT")
   if [ ${#OUTS[@]} -eq 0 ]; then
     c '1;33' "── không có đích phát — chỉ ghi file, không bắn đi đâu"
   else
@@ -521,6 +525,60 @@ cleanup
 LIVE_EOF
 chmod +x "$DIR/live.sh"
 ok "đã ghi $DIR/live.sh"
+
+cat > "$DIR/net-test.sh" <<'NET_EOF'
+#!/usr/bin/env bash
+# Đo đường VPS → nền tảng, KHÔNG cần điện thoại: đọc đích phát app đã gửi lên Firebase,
+# đẩy hình thử (đồng hồ chạy) 60 giây tới từng đích với đúng bitrate app đang chọn.
+# Mở YouTube Studio / Facebook Live Producer xem chấm báo Excellent hay Poor.
+#   /opt/mplive/net-test.sh            đẩy 60 giây
+#   /opt/mplive/net-test.sh 120        đẩy 120 giây
+set -uo pipefail
+DIR=/opt/mplive
+SEC="${1:-60}"
+PASS=$(cat "$DIR/publish.pass") || { echo "thiếu publish.pass"; exit 1; }
+eval "$(MP_PASS="$PASS" python3 - "$DIR/score.json" <<'PY'
+import json, os, sys, shlex, subprocess, urllib.request
+cfg = json.load(open(sys.argv[1], encoding="utf-8"))
+url = cfg["db"].rstrip("/") + "/sessions/" + cfg.get("room", "default") + ".json"
+try:
+    j = json.loads(urllib.request.urlopen(url, timeout=8).read().decode())
+    p = subprocess.run(["openssl","enc","-aes-256-cbc","-d","-pbkdf2","-iter","10000","-md","sha256","-a","-A","-pass","env:MP_PASS"],
+                       input=j["enc"].encode(), capture_output=True, check=True)
+    s = json.loads(p.stdout.decode())
+except Exception as e:
+    print("ERR=" + shlex.quote(str(e))); sys.exit(0)
+out = s.get("out") or {}
+print("VBR=%d" % int(s.get("vbr", 2800)))
+print("ORI=" + shlex.quote(s.get("ori", "landscape")))
+for k in ("fb", "yt", "tt"):
+    u = out.get(k, "")
+    print("D_%s=%s" % (k.upper(), shlex.quote(u if isinstance(u, str) else "")))
+PY
+)"
+[ -n "${ERR:-}" ] && { echo "✗ không đọc được cấu hình từ app: $ERR"; exit 1; }
+[ "$ORI" = "portrait" ] && SZ=720x1280 || SZ=1280x720
+n=0
+for k in FB YT TT; do
+  u="D_$k"; u="${!u}"
+  [ -z "$u" ] && continue
+  n=$((n+1))
+  printf '\n\033[1;36m═══ %s · %s giây · %dk · %s\033[0m\n' "$k" "$SEC" "$VBR" "$(printf '%s' "$u" | sed -E 's#^(rtmps?://[^/]+/).*#\1***#')"
+  echo "   mở trang phát của $k xem chấm trạng thái. speed phải ≈1.00x suốt; tụt hoặc treo là đường mạng VPS→$k có vấn đề."
+  timeout $((SEC+15)) ffmpeg -nostdin -hide_banner -loglevel warning -stats -re \
+    -f lavfi -i "testsrc2=size=$SZ:rate=30" -f lavfi -i "sine=frequency=440:sample_rate=44100" -t "$SEC" \
+    -c:v libx264 -preset veryfast -profile:v high -pix_fmt yuv420p \
+    -b:v "${VBR}k" -maxrate "${VBR}k" -bufsize "$((VBR*2))k" -g 60 -keyint_min 60 -sc_threshold 0 \
+    -c:a aac -b:a 128k -ar 44100 -ac 2 -f flv "$u"
+  rc=$?
+  [ $rc -eq 0 ] && printf '\033[0;32m✓ %s: đẩy trọn %s giây\033[0m\n' "$k" "$SEC" \
+                || printf '\033[0;31m✗ %s: ffmpeg thoát mã %s (bị treo/ngắt giữa chừng)\033[0m\n' "$k" "$rc"
+done
+[ $n -eq 0 ] && echo "app chưa bật đích nào — vào ⚙ bật YouTube/Facebook rồi bấm LƯU, sau đó bấm PHÁT rồi DỪNG ngay để app gửi cấu hình lên"
+exit 0
+NET_EOF
+chmod +x "$DIR/net-test.sh"
+ok "đã ghi $DIR/net-test.sh (đo đường VPS → nền tảng, không cần điện thoại)"
 
 c '1;33' "4/5 · File cấu hình"
 if [ -f "$DIR/live.conf" ]; then
