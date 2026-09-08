@@ -12,7 +12,7 @@ die(){ printf '\n\033[0;31m✗ %s\033[0m\n' "$1"; exit 1; }
 [ -d "$DIR" ] || die "Chưa có $DIR — chạy setup.sh trước."
 c '1' "═══ CÀI PHẦN PHÁT LUỒNG ═══"
 
-c '1;33' "1/4 · Thư viện vẽ ảnh"
+c '1;33' "1/5 · Thư viện vẽ ảnh"
 if python3 -c "import PIL" 2>/dev/null; then
   ok "Pillow đã có"
 else
@@ -22,7 +22,7 @@ else
   ok "Pillow xong"
 fi
 
-c '1;33' "2/4 · Bộ vẽ bảng điểm"
+c '1;33' "2/5 · Bộ vẽ bảng điểm"
 mkdir -p "$DIR/ovl" "$DIR/rec" "$DIR/log" "$DIR/fonts"
 cat > "$DIR/render.py" <<'RENDER_EOF'
 #!/usr/bin/env python3
@@ -297,7 +297,7 @@ RENDER_EOF
 chmod +x "$DIR/render.py"
 ok "đã ghi $DIR/render.py"
 
-c '1;33' "3/4 · Script phát luồng"
+c '1;33' "3/5 · Script phát luồng"
 cat > "$DIR/live.sh" <<'LIVE_EOF'
 #!/usr/bin/env bash
 # Nhận luồng từ điện thoại, nung bảng điểm, bắn ra Facebook/YouTube/TikTok
@@ -327,6 +327,15 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+# Chỉ cho một phiên chạy tại một thời điểm (MediaMTX có thể gọi lại khi luồng rớt rồi vào lại)
+# Nếu phiên trước còn đang dọn dẹp (luồng rớt rồi vào lại) thì ĐỢI nó xong rồi mới chạy,
+# không được bỏ qua — bỏ qua là luồng vào lại không được nung.
+exec 9>"$DIR/live.lock"
+if ! flock -w 45 9; then
+  echo "$(date '+%H:%M:%S') đợi 45s vẫn không lấy được khoá, bỏ cuộc" >> "$LOG"
+  exit 1
+fi
 
 [ -f "$CONF" ]  || die "thiếu $CONF"
 [ -f "$SCORE" ] || die "thiếu $SCORE (khai báo nguồn điểm)"
@@ -381,6 +390,7 @@ cleanup(){
          -movflags +faststart -y "${REC%.mp4}-web.mp4" 2>/dev/null; then
       mv "${REC%.mp4}-web.mp4" "$REC"
       c '0;32' "✓ bản ghi: $REC ($(du -h "$REC" | cut -f1))"
+      echo "$(date '+%Y-%m-%d %H:%M:%S') KẾT THÚC bản ghi $REC ($(du -h "$REC" | cut -f1))" >> "$LOG"
     else
       c '0;33' "⚠ không sắp lại được, giữ bản thô: $REC"
     fi
@@ -390,6 +400,9 @@ cleanup(){
   exit 0
 }
 trap cleanup INT TERM
+
+# ---- đợi luồng vào ổn định ----
+sleep 2
 
 # ---- bảng điểm ----
 rm -f "$FIFO"; mkfifo "$FIFO"
@@ -415,7 +428,9 @@ FILTER="[0:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,\
 pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:black,fps=${FPS},setsar=1[base];\
 [base][1:v]overlay=${MARGIN}:H-h-${MARGIN}:eof_action=repeat:format=auto[v]"
 
-ffmpeg -nostdin -hide_banner -loglevel warning -stats \
+[ -t 1 ] && STATS="-stats" || STATS=""
+echo "$(date '+%Y-%m-%d %H:%M:%S') BẮT ĐẦU $RES → $(( ${#OUTS[@]} - 1 )) đích, ghi $REC" >> "$LOG"
+ffmpeg -nostdin -hide_banner -loglevel warning $STATS \
   -thread_queue_size 1024 -rw_timeout 15000000 \
   -i "rtmp://127.0.0.1:1935/live?user=hieu&pass=$PASS" \
   -thread_queue_size 1024 -f image2pipe -framerate 4 -i "$FIFO" \
@@ -425,15 +440,16 @@ ffmpeg -nostdin -hide_banner -loglevel warning -stats \
   -b:v "$VBR" -maxrate "$VBR" -bufsize "$(( ${VBR%k} * 2 ))k" \
   -g $(( FPS * 2 )) -keyint_min $(( FPS * 2 )) -sc_threshold 0 \
   -c:a aac -b:a "$ABR" -ar 44100 -ac 2 \
-  -f tee "$TEE" 2>&1 | tee -a "$LOG" &
-FPID=$!
+  -shortest -fflags +shortest -max_interleave_delta 100M \
+  -f tee "$TEE" 2> >(tee -a "$LOG" >&2) &
+FPID=$!          # đúng PID của ffmpeg (process substitution, không phải pipeline)
 wait $FPID
 cleanup
 LIVE_EOF
 chmod +x "$DIR/live.sh"
 ok "đã ghi $DIR/live.sh"
 
-c '1;33' "4/4 · File cấu hình"
+c '1;33' "4/5 · File cấu hình"
 if [ -f "$DIR/live.conf" ]; then
   ok "live.conf đã có — giữ nguyên, không ghi đè"
 else
@@ -477,15 +493,39 @@ SCORE_EOF
   ok "đã tạo $DIR/score.json (anh sửa lại cho khớp bảng điểm)"
 fi
 
+c '1;33' "5/5 · Tự chạy khi điện thoại bấm PHÁT, tự dừng khi bấm DỪNG"
+cat > "$DIR/on-ready.sh" <<'HOOK_EOF'
+#!/bin/bash
+# MediaMTX gọi file này khi có luồng vào. Nó thả live.sh ra chạy độc lập rồi thoát ngay,
+# để MediaMTX không giết được live.sh lúc luồng ngắt (live.sh tự kết thúc và sắp lại file).
+setsid /opt/mplive/live.sh >> /opt/mplive/log/live.out 2>&1 < /dev/null &
+exit 0
+HOOK_EOF
+chmod +x "$DIR/on-ready.sh"
+if grep -q 'runOnReady' "$DIR/mediamtx.yml"; then
+  ok "MediaMTX đã có móc runOnReady"
+else
+  python3 - "$DIR/mediamtx.yml" <<'PYE'
+import sys
+p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+a="    source: publisher\n"
+assert s.count(a)==1, "không tìm thấy 'source: publisher' trong mediamtx.yml"
+s=s.replace(a, a+"    runOnReady: /opt/mplive/on-ready.sh\n    runOnReadyRestart: no\n")
+open(p,'w',encoding='utf-8').write(s)
+PYE
+  ok "đã móc on-ready.sh vào MediaMTX"
+fi
+systemctl restart mplive-ingest
+sleep 2
+systemctl is-active --quiet mplive-ingest && ok "mplive-ingest đã khởi động lại" || die "mplive-ingest không lên — xem: journalctl -u mplive-ingest -n 30"
+
 printf '\n'
 c '1' "═══ XONG ═══"
-printf '  Còn hai việc anh phải điền tay:\n\n'
-printf '  1. nano %s/score.json   ← link Firebase và mã phòng, lấy y như trong trang bảng điểm\n' "$DIR"
-printf '  2. nano %s/live.conf    ← dán địa chỉ Facebook và YouTube\n\n' "$DIR"
-printf '  Xem thử bảng điểm ra sao (không cần phát):\n'
-printf '    python3 %s/render.py --conf %s/score.json --once /tmp/thu.png\n\n' "$DIR" "$DIR"
-printf '  Chạy thử không bắn đi đâu, chỉ ghi file:\n'
-printf '    %s/live.sh --test\n\n' "$DIR"
-printf '  Phát thật:\n'
-printf '    %s/live.sh\n' "$DIR"
-printf '    %s/live.sh --tiktok "rtmp://..."   (thêm TikTok cho riêng phiên đó)\n\n' "$DIR"
+printf '  Từ giờ KHÔNG cần vào VPS mỗi lần live nữa:\n'
+printf '    • Bấm PHÁT trên app  → VPS tự nung bảng điểm và bắn ra các đích trong live.conf\n'
+printf '    • Bấm DỪNG trên app  → VPS tự đóng file, sắp lại MP4, để ở %s/rec/\n\n' "$DIR"
+printf '  Còn hai việc điền một lần (nếu chưa):\n'
+printf '    %s/score.json  ← địa chỉ Firebase + mã phòng\n' "$DIR"
+printf '    %s/live.conf   ← địa chỉ Facebook / YouTube\n\n' "$DIR"
+printf '  Theo dõi lúc đang live : tail -f %s/log/live.log\n' "$DIR"
+printf '  Chạy tay khi cần thử   : %s/live.sh --test\n\n' "$DIR"
