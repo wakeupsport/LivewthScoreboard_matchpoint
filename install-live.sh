@@ -21,6 +21,11 @@ else
   python3 -c "import PIL" 2>/dev/null || die "cài Pillow thất bại"
   ok "Pillow xong"
 fi
+if printf 'x' | openssl enc -aes-256-cbc -pbkdf2 -iter 10000 -md sha256 -a -pass pass:t >/dev/null 2>&1; then
+  ok "openssl giải mã được cấu hình từ app"
+else
+  die "openssl quá cũ (cần ≥ 1.1.1 để có -pbkdf2)"
+fi
 
 c '1;33' "2/5 · Bộ vẽ bảng điểm"
 mkdir -p "$DIR/ovl" "$DIR/rec" "$DIR/log" "$DIR/fonts"
@@ -90,7 +95,7 @@ class Source:
 
     def fetch(self):
         req = urllib.request.Request(self.url, headers={"Cache-Control": "no-cache"})
-        with urllib.request.urlopen(req, timeout=4) as r:
+        with urllib.request.urlopen(req, timeout=8) as r:
             raw = r.read().decode("utf-8")
         j = json.loads(raw) if raw.strip() else None
         if j is None:
@@ -303,7 +308,11 @@ cat > "$DIR/live.sh" <<'LIVE_EOF'
 # Nhận luồng từ điện thoại, nung bảng điểm, bắn ra Facebook/YouTube/TikTok
 # và ghi một bản MP4 để đưa lên R2.
 #
-#   live.sh              chạy với cấu hình trong /opt/mplive/live.conf
+#   Đích phát + khung hình (ngang/dọc) do APP gửi lên Firebase (đã mã hoá bằng
+#   mật khẩu VPS) ngay trước khi bấm PHÁT: <db>/sessions/<room>.json
+#   Không đọc được thì rơi về live.conf; live.conf trống thì chỉ ghi file.
+#
+#   live.sh              tự chạy khi luồng vào (MediaMTX gọi qua on-ready.sh)
 #   live.sh --test       không bắn đi đâu cả, chỉ ghi ra file để xem thử
 #   live.sh --tiktok "rtmp://..."   thêm đích TikTok cho riêng phiên này
 set -uo pipefail
@@ -350,6 +359,56 @@ FPS="${FPS:-30}"
 OVL_W="${OVL_W:-760}"
 OVL_H="${OVL_H:-200}"
 MARGIN="${MARGIN:-36}"
+OVL_TOP="${OVL_TOP:-170}"     # khung dọc: bảng điểm nằm ngang giữa, cách mép trên chừng này
+ORI="landscape"
+
+# ---- cấu hình phiên do app gửi lên Firebase (mã hoá bằng mật khẩu VPS) ----
+SESS_OK=0; SESS_ERR=""; S_FB=""; S_YT=""; S_TT=""
+SESS=$(MP_PASS="$PASS" python3 - "$SCORE" <<'PY'
+import json, os, sys, shlex, subprocess, time, urllib.request
+cfg = json.load(open(sys.argv[1], encoding="utf-8")); pw = os.environ["MP_PASS"]
+def bail(m): print("SESS_ERR=" + shlex.quote(m)); sys.exit(0)
+if cfg.get("kind", "rtdb") != "rtdb": bail("score.json không phải rtdb — app chỉ gửi cấu hình qua Realtime Database")
+url = cfg["db"].rstrip("/") + "/sessions/" + cfg.get("room", "default") + ".json"
+try:
+    raw = urllib.request.urlopen(urllib.request.Request(url, headers={"Cache-Control": "no-cache"}), timeout=8).read().decode()
+except Exception as e:
+    bail("không đọc được Firebase: %s" % e)
+j = json.loads(raw) if raw.strip() else None
+if not isinstance(j, dict) or "enc" not in j: bail("app chưa gửi cấu hình phiên lên Firebase")
+p = subprocess.run(["openssl", "enc", "-aes-256-cbc", "-d", "-pbkdf2", "-iter", "10000", "-md", "sha256",
+                    "-a", "-A", "-pass", "env:MP_PASS"], input=j["enc"].encode(), capture_output=True)
+if p.returncode != 0: bail("giải mã thất bại — mật khẩu trong app KHÁC mật khẩu VPS")
+try:
+    s = json.loads(p.stdout.decode("utf-8"))
+except Exception:
+    bail("cấu hình phiên hỏng")
+out = s.get("out") or {}
+def ok(u): return isinstance(u, str) and (u.startswith("rtmp://") or u.startswith("rtmps://"))
+print("SESS_OK=1")
+print("SESS_AGE=%d" % max(0, int(time.time() - j.get("ts", 0) / 1000)))
+print("S_ORI=" + shlex.quote("portrait" if s.get("ori") == "portrait" else "landscape"))
+for k in ("w", "h", "vbr"):
+    v = s.get(k)
+    if isinstance(v, int) and v > 0: print("S_%s=%d" % (k.upper(), v))
+for k in ("fb", "yt", "tt"):
+    u = out.get(k)
+    print("S_%s=%s" % (k.upper(), shlex.quote(u if ok(u) else "")))
+PY
+)
+eval "$SESS"
+if [ "$SESS_OK" = "1" ]; then
+  ORI="$S_ORI"
+  if [ -n "${S_W:-}" ] && [ -n "${S_H:-}" ]; then
+    # app luôn gửi kích thước ngang (1920x1080); máy dọc thì khung xoay lại
+    [ "$ORI" = "portrait" ] && RES="${S_H}x${S_W}" || RES="${S_W}x${S_H}"
+  fi
+  [ -n "${S_VBR:-}" ] && VBR="${S_VBR}k"
+  echo "$(date '+%Y-%m-%d %H:%M:%S') cấu hình từ app (gửi ${SESS_AGE}s trước): $ORI $RES $VBR" >> "$LOG"
+else
+  echo "$(date '+%Y-%m-%d %H:%M:%S') ⚠ $SESS_ERR → dùng live.conf" >> "$LOG"
+  c '0;33' "⚠ $SESS_ERR → dùng live.conf"
+fi
 W="${RES%x*}"; H="${RES#*x}"
 
 command -v ffmpeg >/dev/null || die "chưa có ffmpeg"
@@ -365,11 +424,23 @@ OUTS=()
 if [ "$TEST" = "1" ]; then
   c '1;33' "── CHẾ ĐỘ THỬ: không bắn ra nền tảng nào, chỉ ghi file"
 else
-  [ -n "${FB_URL:-}" ] && OUTS+=("[f=flv:onfail=ignore]$FB_URL")
-  [ -n "${YT_URL:-}" ] && OUTS+=("[f=flv:onfail=ignore]$YT_URL")
-  [ -n "$TT_EXTRA"   ] && OUTS+=("[f=flv:onfail=ignore]$TT_EXTRA")
-  [ -n "${TT_URL:-}" ] && [ -z "$TT_EXTRA" ] && OUTS+=("[f=flv:onfail=ignore]$TT_URL")
-  [ ${#OUTS[@]} -eq 0 ] && die "chưa khai báo đích nào trong $CONF (FB_URL / YT_URL)"
+  if [ "$SESS_OK" = "1" ]; then
+    FB="$S_FB"; YT="$S_YT"; TT="$S_TT"
+  else
+    FB="${FB_URL:-}"; YT="${YT_URL:-}"; TT="${TT_URL:-}"
+  fi
+  [ -n "$TT_EXTRA" ] && TT="$TT_EXTRA"
+  [ -n "$FB" ] && OUTS+=("[f=flv:onfail=ignore]$FB")
+  [ -n "$YT" ] && OUTS+=("[f=flv:onfail=ignore]$YT")
+  [ -n "$TT" ] && OUTS+=("[f=flv:onfail=ignore]$TT")
+  if [ ${#OUTS[@]} -eq 0 ]; then
+    c '1;33' "── không có đích phát — chỉ ghi file, không bắn đi đâu"
+  else
+    # ghi nhật ký đích phát nhưng che khoá
+    for u in "$FB" "$YT" "$TT"; do
+      [ -n "$u" ] && echo "$(date '+%Y-%m-%d %H:%M:%S')   đích: $(printf '%s' "$u" | sed -E 's#^(rtmps?://[^/]+/).*#\1***#')" >> "$LOG"
+    done
+  fi
 fi
 OUTS+=("[f=mp4]$REC")
 TEE=$(IFS='|'; echo "${OUTS[*]}")
@@ -413,10 +484,10 @@ sleep 1
 kill -0 "$RPID" 2>/dev/null || die "bộ vẽ bảng điểm chết ngay. Xem: tail $LOG"
 
 c '1;36' "═══ ĐANG PHÁT ═══"
-inf "Độ phân giải : $RES @ ${FPS}fps, ${VBR}"
+inf "Khung hình   : $([ "$ORI" = portrait ] && echo 'DỌC' || echo 'NGANG') $RES @ ${FPS}fps, ${VBR}$([ "$SESS_OK" = 1 ] && echo ' (từ app)' || echo ' (live.conf)')"
 inf "Số đích phát : $([ "$TEST" = 1 ] && echo 'không (chế độ thử)' || echo $(( ${#OUTS[@]} - 1 )))"
 inf "Bản ghi      : $REC"
-inf "Bảng điểm    : ${OVL_W}x${OVL_H} góc trái dưới"
+inf "Bảng điểm    : ${OVL_W}x${OVL_H} $([ "$ORI" = portrait ] && echo 'giữa, sát mép trên' || echo 'góc trái dưới')"
 inf "Nhật ký      : tail -f $LOG"
 echo
 inf "Điện thoại đẩy luồng vào: rtmp://<IP-máy>:1935/live?user=hieu&pass=<mật khẩu>"
@@ -424,12 +495,14 @@ inf "Dừng bằng Ctrl+C — ĐỪNG đóng cửa sổ, nếu không bản ghi 
 echo
 
 # scale luồng vào cho khít khung, chèn viền đen nếu tỉ lệ lệch, rồi chồng bảng điểm
+# ngang: góc trái dưới · dọc: giữa, gần mép trên (tránh vùng bình luận của TikTok ở dưới)
+if [ "$ORI" = "portrait" ]; then OVL_XY="(W-w)/2:${OVL_TOP}"; else OVL_XY="${MARGIN}:H-h-${MARGIN}"; fi
 FILTER="[0:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,\
 pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:black,fps=${FPS},setsar=1[base];\
-[base][1:v]overlay=${MARGIN}:H-h-${MARGIN}:eof_action=repeat:format=auto[v]"
+[base][1:v]overlay=${OVL_XY}:eof_action=repeat:format=auto[v]"
 
 [ -t 1 ] && STATS="-stats" || STATS=""
-echo "$(date '+%Y-%m-%d %H:%M:%S') BẮT ĐẦU $RES → $(( ${#OUTS[@]} - 1 )) đích, ghi $REC" >> "$LOG"
+echo "$(date '+%Y-%m-%d %H:%M:%S') BẮT ĐẦU $ORI $RES → $(( ${#OUTS[@]} - 1 )) đích, ghi $REC" >> "$LOG"
 ffmpeg -nostdin -hide_banner -loglevel warning $STATS \
   -thread_queue_size 1024 -rw_timeout 15000000 \
   -i "rtmp://127.0.0.1:1935/live?user=hieu&pass=$PASS" \
@@ -475,7 +548,7 @@ YT_URL=""
 TT_URL=""
 CONF_EOF
   chmod 600 "$DIR/live.conf"
-  ok "đã tạo $DIR/live.conf (chưa có đích nào — anh điền vào)"
+  ok "đã tạo $DIR/live.conf (dự phòng — đích phát bình thường lấy từ app)"
 fi
 
 if [ -f "$DIR/score.json" ]; then
@@ -521,11 +594,10 @@ systemctl is-active --quiet mplive-ingest && ok "mplive-ingest đã khởi độ
 
 printf '\n'
 c '1' "═══ XONG ═══"
-printf '  Từ giờ KHÔNG cần vào VPS mỗi lần live nữa:\n'
-printf '    • Bấm PHÁT trên app  → VPS tự nung bảng điểm và bắn ra các đích trong live.conf\n'
-printf '    • Bấm DỪNG trên app  → VPS tự đóng file, sắp lại MP4, để ở %s/rec/\n\n' "$DIR"
-printf '  Còn hai việc điền một lần (nếu chưa):\n'
-printf '    %s/score.json  ← địa chỉ Firebase + mã phòng\n' "$DIR"
-printf '    %s/live.conf   ← địa chỉ Facebook / YouTube\n\n' "$DIR"
+printf '  Từ giờ mọi thứ làm trên điện thoại:\n'
+printf '    • Trong app ⚙: bật Facebook/YouTube/TikTok, dán khoá, chọn ngang/dọc, LƯU\n'
+printf '    • Bấm PHÁT  → app gửi cấu hình (mã hoá) lên Firebase, VPS đọc rồi nung + bắn ra các đích\n'
+printf '    • Bấm DỪNG  → VPS tự đóng file, sắp lại MP4, để ở %s/rec/\n\n' "$DIR"
+printf '  Điền một lần (nếu chưa): %s/score.json ← địa chỉ Firebase + mã phòng (phải khớp app)\n\n' "$DIR"
 printf '  Theo dõi lúc đang live : tail -f %s/log/live.log\n' "$DIR"
 printf '  Chạy tay khi cần thử   : %s/live.sh --test\n\n' "$DIR"
